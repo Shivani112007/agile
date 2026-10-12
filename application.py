@@ -52,7 +52,21 @@ class Store:
         return self.mem[t].get(key)
 
     def all(self, t):
-        return self._t(t).scan().get("Items", []) if self.ddb else list(self.mem[t].values())
+        if not self.ddb:
+            return list(self.mem[t].values())
+
+        table = self._t(t)
+        items = []
+        response = table.scan()
+        items.extend(response.get("Items", []))
+
+        while response.get("LastEvaluatedKey"):
+            response = table.scan(
+                ExclusiveStartKey=response["LastEvaluatedKey"]
+            )
+            items.extend(response.get("Items", []))
+
+        return items
 
 
 db = Store()
@@ -60,6 +74,20 @@ db = Store()
 
 def split(text):
     return [s.strip() for s in (text or "").replace("\n", ",").split(",") if s.strip()]
+
+from datetime import datetime
+
+def parse_deadline(value):
+    if not value:
+        return None
+
+    for fmt in ("%Y-%m-%d", "%d %b %Y"):
+        try:
+            return datetime.strptime(value.strip(), fmt).date()
+        except ValueError:
+            continue
+
+    return None
 
 
 def match_score(student_skills, required_skills):
@@ -358,30 +386,230 @@ OPPS = r"""
 """
 
 
+
 ADMIN = r"""
 <div class="page"><div class="container">
 <div class="page-title"><div><span class="eyebrow">Administration</span><h1 style="margin-top:10px">Control Center</h1><p class="muted">Manage students, opportunities and platform skills.</p></div></div>
-<div class="admin-grid"><div class="card stat"><div class="label">Total Students</div><div class="value">{{ stats.students }}</div></div><div class="card stat"><div class="label">Total Opportunities</div><div class="value">{{ stats.opportunities }}</div></div><div class="card stat"><div class="label">Total Skills</div><div class="value">{{ stats.skills }}</div></div><div class="card stat"><div class="label">Active Opportunities</div><div class="value">{{ stats.active }}</div></div></div>
-<div class="grid-2"><div class="card"><h3>Post an opportunity</h3><form method=post>
-<div class="form-grid"><div class="field"><label>Title</label><input name=title required placeholder="Frontend Developer Internship"></div><div class="field"><label>Organization</label><input name=org required placeholder="Company / Team"></div>
-<div class="field"><label>Category</label><select name=type><option>Internship</option><option>Hackathon</option><option>Workshop</option><option>Project</option></select></div><div class="field"><label>Mode / Location</label><input name=location placeholder="Remote | Chennai"></div>
-<div class="field"><label>Deadline</label><input name=deadline placeholder="30 Nov 2026"></div><div class="field"><label>Duration</label><input name=duration placeholder="3 Months"></div>
-<div class="field full"><label>Required skills</label><input name=skills required placeholder="React, JavaScript, HTML, CSS"></div></div>
-<div class="form-actions"><button class="btn btn-primary">Publish opportunity</button></div></form></div>
-<div class="card"><h3>Recent students</h3>{% if students %}<div class="list">{% for s in students[:7] %}<div class="list-item"><span><strong>{{ s.name }}</strong><small>{{ s.id }}</small></span><span class="badge">{{ s.skills|length }} skills</span></div>{% endfor %}</div>{% else %}<div class="empty"><h3>No students yet</h3><p>Registered students will appear here.</p></div>{% endif %}</div></div>
-<div class="card" style="margin-top:18px"><h3>Opportunity management</h3><div class="table-wrap"><table class="table"><thead><tr><th>Opportunity</th><th>Organization</th><th>Category</th><th>Skills</th><th>Deadline</th></tr></thead><tbody>{% for o in ops %}<tr><td><b>{{ o.title }}</b></td><td>{{ o.org }}</td><td><span class="badge">{{ o.type }}</span></td><td>{{ ', '.join(o.skills) }}</td><td>{{ o.deadline or "Open" }}</td></tr>{% else %}<tr><td colspan=5>No opportunities posted yet.</td></tr>{% endfor %}</tbody></table></div></div>
+
+<div class="admin-grid">
+<div class="card stat"><div class="label">Total Students</div><div class="value">{{ stats.students }}</div></div>
+<div class="card stat"><div class="label">Total Opportunities</div><div class="value">{{ stats.opportunities }}</div></div>
+<div class="card stat"><div class="label">Total Skills</div><div class="value">{{ stats.skills }}</div></div>
+<div class="card stat"><div class="label">Active Opportunities</div><div class="value">{{ stats.active }}</div></div>
+</div>
+
+<div class="grid-2">
+<div class="card">
+<h3>Post an opportunity</h3>
+<form method="post">
+<div class="form-grid">
+<div class="field"><label>Title</label><input name="title" required placeholder="Frontend Developer Internship"></div>
+<div class="field"><label>Organization</label><input name="org" required placeholder="Company / Team"></div>
+<div class="field"><label>Category</label><select name="type"><option>Internship</option><option>Hackathon</option><option>Workshop</option><option>Project</option></select></div>
+<div class="field"><label>Mode / Location</label><input name="location" placeholder="Remote | Chennai"></div>
+<div class="field"><label>Deadline</label><input name="deadline" placeholder="30 Nov 2026"></div>
+<div class="field"><label>Duration</label><input name="duration" placeholder="3 Months"></div>
+<div class="field full"><label>Required skills</label><input name="skills" required placeholder="React, JavaScript, HTML, CSS"></div>
+</div>
+<div class="form-actions"><button class="btn btn-primary">Publish opportunity</button></div>
+</form>
+</div>
+
+<div class="card">
+<h3>Recent students</h3>
+{% if students %}
+<div class="list">
+{% for s in students[:7] %}
+<div class="list-item">
+<span><strong>{{ s.name }}</strong><small>{{ s.id }}</small></span>
+<span class="badge">{{ s.skills|length }} skills</span>
+</div>
+{% endfor %}
+</div>
+{% else %}
+<div class="empty"><h3>No students yet</h3><p>Registered students will appear here.</p></div>
+{% endif %}
+</div>
+</div>
+
+<div class="card" style="margin-top:18px">
+<h3>Opportunity management</h3>
+<div class="table-wrap">
+<table class="table">
+<thead>
+<tr>
+<th>Opportunity</th>
+<th>Organization</th>
+<th>Category</th>
+<th>Skills</th>
+<th>Deadline</th>
+<th>Actions</th>
+</tr>
+</thead>
+<tbody>
+{% for o in ops %}
+<tr>
+<td><b>{{ o.title }}</b></td>
+<td>{{ o.org }}</td>
+<td><span class="badge">{{ o.type }}</span></td>
+<td>{{ ', '.join(o.skills) }}</td>
+<td>{{ o.deadline or "Open" }}</td>
+<td>
+<div style="display:flex;gap:7px;flex-wrap:wrap">
+<a class="btn btn-soft btn-sm"
+   href="{{ url_for('edit_opportunity', oid=o.id) }}">Edit</a>
+
+<form method="post"
+      action="{{ url_for('delete_opportunity', oid=o.id) }}"
+      onsubmit="return confirm('Remove this opportunity from student listings? Existing application records will be preserved.')">
+<button type="submit" class="btn btn-danger btn-sm">Delete</button>
+</form>
+</div>
+</td>
+</tr>
+{% else %}
+<tr><td colspan="6">No opportunities posted yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+</div>
+
+</div></div>
+"""
+
+
+EDIT_OPPORTUNITY = r"""
+<div class="page"><div class="container">
+  <div class="page-title">
+    <div>
+      <span class="eyebrow">Administration</span>
+      <h1 style="margin-top:10px">Edit Opportunity</h1>
+      <p class="muted">Update the opportunity details.</p>
+    </div>
+    <a class="btn btn-soft" href="{{ url_for('admin') }}">Cancel</a>
+  </div>
+
+  <div class="card form-card">
+    <form method="post">
+      <div class="form-grid">
+        <div class="field">
+          <label>Title</label>
+          <input name="title" value="{{ o.title }}" required>
+        </div>
+        <div class="field">
+          <label>Organization</label>
+          <input name="org" value="{{ o.org }}" required>
+        </div>
+        <div class="field">
+          <label>Category</label>
+          <select name="type">
+            {% for t in ['Internship','Hackathon','Workshop','Project'] %}
+              <option value="{{ t }}" {% if o.type == t %}selected{% endif %}>{{ t }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>Mode / Location</label>
+          <input name="location" value="{{ o.location }}">
+        </div>
+        <div class="field">
+          <label>Deadline</label>
+          <input name="deadline" value="{{ o.deadline }}">
+        </div>
+        <div class="field">
+          <label>Duration</label>
+          <input name="duration" value="{{ o.duration }}">
+        </div>
+        <div class="field full">
+          <label>Required skills (comma separated)</label>
+          <input name="skills" value="{{ ', '.join(o.skills) }}" required>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary">Save Changes</button>
+      </div>
+    </form>
+  </div>
 </div></div>
 """
 
 
 APPLICATIONS = r"""
 <div class="page"><div class="container">
-<div class="page-title"><div><span class="eyebrow">Application tracker</span><h1 style="margin-top:10px">Applications</h1><p class="muted">Keep track of where you are in your opportunity journey.</p></div></div>
-<div class="card"><div class="table-wrap"><table class="table"><thead><tr><th>Opportunity</th>{% if u.role=='admin' %}<th>Student</th>{% endif %}<th>Status</th>{% if u.role=='admin' %}<th>Update</th>{% endif %}</tr></thead><tbody>
-{% for a in apps %}<tr><td><b>{{ titles.get(a.opp, "Opportunity") }}</b></td>{% if u.role=='admin' %}<td>{{ a.student }}</td>{% endif %}<td><span class="badge">{{ a.status }}</span></td>{% if u.role=='admin' %}<td><form method=post style="display:flex;gap:7px"><input type=hidden name=id value="{{ a.id }}"><select name=status><option>Submitted</option><option>Shortlisted</option><option>Accepted</option><option>Rejected</option></select><button class="btn btn-soft btn-sm">Update</button></form></td>{% endif %}</tr>
-{% else %}<tr><td colspan=4><div class="empty"><div class="empty-icon">✓</div><h3>No applications yet</h3><p>When you apply to an opportunity, it will appear here.</p><a class="btn btn-primary" href="{{ url_for('opportunities') }}">Explore opportunities</a></div></td></tr>{% endfor %}
-</tbody></table></div></div></div></div>
+<div class="page-title">
+  <div>
+    <span class="eyebrow">Application tracker</span>
+    <h1 style="margin-top:10px">Applications</h1>
+    <p class="muted">Keep track of where you are in your opportunity journey.</p>
+  </div>
+</div>
+
+<div class="card"><div class="table-wrap">
+<table class="table">
+<thead><tr>
+  <th>Opportunity</th><th>Company</th>
+  {% if u.role == 'admin' %}<th>Student</th>{% endif %}
+  <th>Status</th>
+  {% if u.role == 'admin' %}<th>Update</th>{% else %}<th>Actions</th>{% endif %}
+</tr></thead>
+<tbody>
+{% for a in apps %}
+<tr>
+  <td><b>{{ titles.get(a.opp, "Opportunity") }}</b></td>
+  <td>{{ a.company or companies.get(a.opp, "Unknown") }}</td>
+  {% if u.role == 'admin' %}<td>{{ a.student }}</td>{% endif %}
+  <td><span class="badge">{{ a.status }}</span></td>
+  {% if u.role == 'admin' %}
+  <td>
+    <form method="post" style="display:flex;gap:7px">
+      <input type="hidden" name="id" value="{{ a.id }}">
+      <select name="status">
+        {% for s in ['Submitted','Under Review','Shortlisted','Accepted','Rejected','Cancelled'] %}
+        <option {% if a.status == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn btn-soft btn-sm">Update</button>
+    </form>
+  </td>
+  {% else %}
+  <td>
+    {% if a.status == 'Cancelled' %}
+      {% if a.opp in active_opps %}
+      <form method="post" action="{{ url_for('apply', oid=a.opp) }}">
+        <button class="btn btn-primary btn-sm">Reapply</button>
+      </form>
+      {% else %}
+      <span class="muted">Opportunity unavailable</span>
+      {% endif %}
+    {% elif a.status == 'Submitted' %}
+      <form method="post"
+            action="{{ url_for('cancel_application', app_id=a.id) }}"
+            onsubmit="return confirm('Cancel this application?')">
+        <button class="btn btn-danger btn-sm">Cancel application</button>
+      </form>
+    {% else %}
+      <span class="muted">No actions available</span>
+    {% endif %}
+  </td>
+  {% endif %}
+</tr>
+{% else %}
+<tr><td colspan="5">
+  <div class="empty">
+    <div class="empty-icon">✓</div>
+    <h3>No applications yet</h3>
+    <p>When you apply to an opportunity, it will appear here.</p>
+    {% if u.role != 'admin' %}
+    <a class="btn btn-primary" href="{{ url_for('opportunities') }}">Explore opportunities</a>
+    {% endif %}
+  </div>
+</td></tr>
+{% endfor %}
+</tbody></table>
+</div></div></div></div>
 """
+
 
 
 LOGIN = r"""
@@ -456,7 +684,11 @@ def dashboard():
     ensure_profile_fields(u)
     apps = [a for a in db.all("applications") if a["student"] == u["id"]]
     ranked = sorted(
-        ({**o, "score": match_score(u["skills"], o.get("skills", []))} for o in db.all("opportunities")),
+        (
+            {**o, "score": match_score(u["skills"], o.get("skills", []))}
+            for o in db.all("opportunities")
+            if o.get("active", True)
+        ),
         key=lambda o: -o["score"]
     )
     return page(
@@ -536,15 +768,82 @@ def admin():
         flash("Opportunity published successfully.")
         return redirect(url_for("admin"))
     students = [ensure_profile_fields(s) for s in db.all("students")]
-    ops = db.all("opportunities")
+    ops = [
+        o for o in db.all("opportunities")
+        if o.get("active", True)
+    ]
     skill_set = {x.lower() for s in students for x in s.get("skills", [])}
     stats = {
-        "students": len(students),
+        "students": sum(1 for s in students if s.get("role") == "student"),
         "opportunities": len(ops),
         "skills": len(skill_set),
-        "active": sum(1 for o in ops if not o.get("deadline") or o.get("deadline") >= str(date.today()))
+        "active": sum(
+            1 for o in ops
+            if not o.get("deadline")
+            or (
+                parse_deadline(o.get("deadline"))
+                and parse_deadline(o.get("deadline")) >= date.today()
+            )
+        )
     }
     return page(ADMIN, title="Admin Control Center", students=students, ops=ops, stats=stats)
+
+
+@app.route("/admin/opportunities/<oid>/edit", methods=["GET", "POST"])
+def edit_opportunity(oid):
+    u = me()
+    if not u or u.get("role") != "admin":
+        abort(403)
+
+    o = db.get("opportunities", oid)
+    if not o:
+        abort(404)
+
+    if request.method == "POST":
+        title = request.form.get("title", "").strip()
+        org = request.form.get("org", "").strip()
+        skills = split(request.form.get("skills"))
+
+        if not title or not org or not skills:
+            flash("Title, organization and required skills are required.")
+            return redirect(url_for("edit_opportunity", oid=oid))
+
+        o.update({
+            "title": title,
+            "org": org,
+            "type": request.form.get("type", "Internship"),
+            "location": request.form.get("location", "").strip(),
+            "deadline": request.form.get("deadline", "").strip(),
+            "duration": request.form.get("duration", "").strip(),
+            "skills": skills
+        })
+        db.put("opportunities", o)
+        flash("Opportunity updated successfully.")
+        return redirect(url_for("admin"))
+
+    return page(
+        EDIT_OPPORTUNITY,
+        title="Edit Opportunity",
+        o=o
+    )
+
+
+@app.route("/admin/opportunities/<oid>/delete", methods=["POST"])
+def delete_opportunity(oid):
+    u = me()
+    if not u or u.get("role") != "admin":
+        abort(403)
+
+    o = db.get("opportunities", oid)
+    if not o:
+        abort(404)
+
+    # Soft delete: preserve the opportunity and its application history.
+    o["active"] = False
+    db.put("opportunities", o)
+
+    flash("Opportunity removed from student listings.")
+    return redirect(url_for("admin"))
 
 
 @app.route("/opportunities")
@@ -555,7 +854,10 @@ def opportunities():
     ensure_profile_fields(u)
     q = request.args.get("q", "").strip().lower()
     typ = request.args.get("type", "").strip()
-    all_ops = db.all("opportunities")
+    all_ops = [
+        o for o in db.all("opportunities")
+        if o.get("active", True)
+    ]
     ranked = []
     for o in all_ops:
         haystack = " ".join([o.get("title", ""), o.get("org", ""), o.get("type", ""), *o.get("skills", [])]).lower()
@@ -565,9 +867,15 @@ def opportunities():
             continue
         ranked.append({**o, "score": match_score(u["skills"], o.get("skills", []))})
     ranked.sort(key=lambda o: (-o["score"], o.get("title", "").lower()))
-    applied = {a["opp"] for a in db.all("applications") if a["student"] == u["id"]}
+    applied = {
+        a["opp"]
+        for a in db.all("applications")
+        if a["student"] == u["id"]
+        and a.get("status") != "Cancelled"
+    }
     types = sorted({o.get("type", "") for o in all_ops if o.get("type")})
     return page(OPPS, title="Opportunities", ranked=ranked, applied=applied, q=q, typ=typ, types=types)
+
 
 
 @app.route("/apply/<oid>", methods=["POST"])
@@ -575,14 +883,82 @@ def apply(oid):
     u = me()
     if not u:
         return redirect(url_for("login"))
-    if db.get("opportunities", oid):
-        key = f"{u['id']}#{oid}"
-        if not db.get("applications", key):
-            db.put("applications", {"id": key, "student": u["id"], "opp": oid, "status": "Submitted"})
-            flash("Application submitted successfully.")
-        else:
-            flash("You have already applied to this opportunity.")
+    if u.get("role") != "student":
+        abort(403)
+
+    o = db.get("opportunities", oid)
+    if not o or not o.get("active", True):
+        flash("This opportunity is no longer available.")
+        return redirect(url_for("opportunities"))
+
+    # Enforce the deadline when it uses the format DD Mon YYYY.
+    deadline_text = o.get("deadline", "").strip()
+    if deadline_text:
+        try:
+            deadline_date = date.fromisoformat(deadline_text)
+        except ValueError:
+            try:
+                from datetime import datetime
+                deadline_date = datetime.strptime(
+                    deadline_text, "%d %b %Y"
+                ).date()
+            except ValueError:
+                deadline_date = None
+
+        if deadline_date and deadline_date < date.today():
+            flash("The application deadline has passed.")
+            return redirect(url_for("opportunities"))
+
+    key = f"{u['id']}#{oid}"
+    existing = db.get("applications", key)
+
+    if existing and existing.get("status") != "Cancelled":
+        flash("You already have an active application for this opportunity.")
+        return redirect(url_for("applications"))
+
+    if existing:
+        existing.update({
+            "company": o.get("org", ""),
+            "status": "Submitted"
+        })
+        db.put("applications", existing)
+        flash("You have successfully reapplied.")
+    else:
+        db.put("applications", {
+            "id": key,
+            "student": u["id"],
+            "opp": oid,
+            "company": o.get("org", ""),
+            "status": "Submitted"
+        })
+        flash("Application submitted successfully.")
+
     return redirect(url_for("applications"))
+
+
+@app.route("/applications/<path:app_id>/cancel", methods=["POST"])
+def cancel_application(app_id):
+    u = me()
+    if not u:
+        return redirect(url_for("login"))
+    if u.get("role") != "student":
+        abort(403)
+
+    a = db.get("applications", app_id)
+    if not a or a.get("student") != u["id"]:
+        abort(404)
+
+    if a.get("status") != "Submitted":
+        flash("Only submitted applications can be cancelled.")
+        return redirect(url_for("applications"))
+
+    a["status"] = "Cancelled"
+    db.put("applications", a)
+
+    flash("Application cancelled. You can reapply while the opportunity is available.")
+    return redirect(url_for("applications"))
+
+
 
 
 @app.route("/applications", methods=["GET", "POST"])
@@ -590,15 +966,52 @@ def applications():
     u = me()
     if not u:
         return redirect(url_for("login"))
-    if request.method == "POST" and u["role"] == "admin":
+
+    if request.method == "POST" and u.get("role") == "admin":
         a = db.get("applications", request.form.get("id", ""))
-        if a:
-            a["status"] = request.form.get("status", "Submitted")
+        status = request.form.get("status", "")
+        allowed_statuses = {
+            "Submitted", "Under Review", "Shortlisted",
+            "Accepted", "Rejected", "Cancelled"
+        }
+
+        if a and status in allowed_statuses:
+            a["status"] = status
             db.put("applications", a)
             flash("Application status updated.")
-    apps = db.all("applications") if u["role"] == "admin" else [a for a in db.all("applications") if a["student"] == u["id"]]
-    titles = {o["id"]: o["title"] for o in db.all("opportunities")}
-    return page(APPLICATIONS, title="Applications", apps=apps, titles=titles, u=u)
+        else:
+            flash("Invalid application or status.")
+
+        return redirect(url_for("applications"))
+
+    apps = (
+        db.all("applications")
+        if u.get("role") == "admin"
+        else [a for a in db.all("applications") if a["student"] == u["id"]]
+    )
+
+    ops = db.all("opportunities")
+    titles = {o["id"]: o["title"] for o in ops}
+    companies = {o["id"]: o.get("org", "") for o in ops}
+    active_opps = {
+        o["id"] for o in ops if o.get("active", True)
+    }
+
+    # Backfill company names for old application records when rendered.
+    for a in apps:
+        if not a.get("company"):
+            a["company"] = companies.get(a.get("opp"), "Unknown")
+
+    return page(
+        APPLICATIONS,
+        title="Applications",
+        apps=apps,
+        titles=titles,
+        companies=companies,
+        active_opps=active_opps,
+        u=u
+    )
+
 
 
 @app.route("/api/match")
